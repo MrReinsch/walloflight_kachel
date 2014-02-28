@@ -35,9 +35,12 @@ void init_PIN_CHANGE_ISR(void){
 
 /* RESET_RX_VARIABLES */
 void reset_rx_variables(void){
+	uint8_t dum=0;
 	rx_buffer=0;
 	rx_byte_counter=0;
 	rx_flag=RX_DATA_INVALID;
+	dum=SPI_STAT_REG;
+    dum=SPI_DATA_REG;
 }	
  
 /* ISR EXT LATCH */
@@ -45,6 +48,7 @@ void reset_rx_variables(void){
 /* EXT_LATCH from 1 to 0 -> RX_DATA invalid disable SPI_ISR */
 ISR(PIN_CHANGE_ISR_VECTOR){	
 	if (EXT_LAT_PIN_REG & EXT_LAT_PIN_MASK){
+        uint8_t dum = SPI_STAT_REG;
 		rx_buffer=SPI_DATA_REG;		
 		rx_flag = RX_DATA_VALID;
 		SPI_CTRL_REG |= (SPI_ENABLE_ISR_MASK);

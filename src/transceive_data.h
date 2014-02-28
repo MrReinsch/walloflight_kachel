@@ -18,6 +18,7 @@
 #define SPI_DDR DDRB
 #define SPI_DDR_MASK (1<<DDB4)
 #define SPI_CTRL_REG SPCR
+#define SPI_STAT_REG SPSR
 #define SPI_CTRL_REG_MASK (1<<SPE)
 #define SPI_DATA_REG SPDR
 #define SPI_ISR_VECTOR SPI_STC_vect
