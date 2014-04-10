@@ -1,12 +1,17 @@
-﻿/*
- * bam.c
+﻿/**
+ * \brief		BAM administration and TLC communication
+ * \file		bam.c
+ * \author  	Rene Reinsch
+ * \date		10.11.2013
+ * \version  	Rev. 3.1 22.2.2014
  *
- * Created: 10.11.2013 16:47:20
- * Author: René Reinsch
- * This module does the BAM,
- * and handles communication with the TLC's
- * Rev. 3.1 22.2.2014
- */ 
+ * \details 	This module does the BAM control and handles the communication with the TLC59281.
+ *				\n\b important:	After the 191th byte has been received, a minimum time of 35µS should
+ *				\n be waited before the final latch can be send.
+ * \note		\b recommended: 50µS pause after every latch
+ *
+ */
+
 #include "bam.h"
 #include "transceive_data.h"
 #include <avr/io.h>
@@ -22,8 +27,9 @@ static volatile const uint8_t bam_timer_map_l[BAM_STEPS]={
 	BAM_TMR_RLD_STP_4_L,
 	BAM_TMR_RLD_STP_5_L,
 	BAM_TMR_RLD_STP_6_L,
-	BAM_TMR_RLD_STP_7_L };
-// BAM TIMER RELOAD MAP H	
+	BAM_TMR_RLD_STP_7_L }; //!< Lookuptable - timer16 low byte reload map, used in ISR(TIMER_16_vect)
+
+// BAM TIMER RELOAD MAP H
 static volatile const uint8_t bam_timer_map_h[BAM_STEPS]={
 	BAM_TMR_RLD_STP_0_H,
 	BAM_TMR_RLD_STP_1_H,
@@ -32,15 +38,17 @@ static volatile const uint8_t bam_timer_map_h[BAM_STEPS]={
 	BAM_TMR_RLD_STP_4_H,
 	BAM_TMR_RLD_STP_5_H,
 	BAM_TMR_RLD_STP_6_H,
-	BAM_TMR_RLD_STP_7_H };
+	BAM_TMR_RLD_STP_7_H }; //!< Lookuptable - timer16 high byte reload, map used in ISR(TIMER_16_vect)
+
 // BAM STEP TABLE POSITION MAP - for transmit 
 static const uint8_t bam_step_map[BAM_STEPS]={
 	BAM_TBL_POS_STEP_0,BAM_TBL_POS_STEP_1,BAM_TBL_POS_STEP_2,BAM_TBL_POS_STEP_3,
 	BAM_TBL_POS_STEP_4,BAM_TBL_POS_STEP_5,BAM_TBL_POS_STEP_6,BAM_TBL_POS_STEP_7
- };	
-/* Maps for look up*/
-/* BIT MASK = STRING 0 - 5 TLC SPI */
- const uint8_t lookup_bit_mask[] = {
+ };	//!< Lookuptable - timer16 reload map offset, used in ISR(TIMER_16_vect)
+
+// Maps for look up
+// BIT MASK = STRING 0 - 5 TLC SPI
+static const uint8_t lookup_bit_mask[] = {
 	 LED_0_0_R_BIT_POS_MASK,LED_0_0_G_BIT_POS_MASK,LED_0_0_B_BIT_POS_MASK,
 	 LED_1_0_R_BIT_POS_MASK,LED_1_0_G_BIT_POS_MASK,LED_1_0_B_BIT_POS_MASK,
 	 LED_2_0_R_BIT_POS_MASK,LED_2_0_G_BIT_POS_MASK,LED_2_0_B_BIT_POS_MASK,
@@ -104,9 +112,10 @@ static const uint8_t bam_step_map[BAM_STEPS]={
 	 LED_4_7_R_BIT_POS_MASK,LED_4_7_G_BIT_POS_MASK,LED_4_7_B_BIT_POS_MASK,
 	 LED_5_7_R_BIT_POS_MASK,LED_5_7_G_BIT_POS_MASK,LED_5_7_B_BIT_POS_MASK,
 	 LED_6_7_R_BIT_POS_MASK,LED_6_7_G_BIT_POS_MASK,LED_6_7_B_BIT_POS_MASK,
-	 LED_7_7_R_BIT_POS_MASK,LED_7_7_G_BIT_POS_MASK,LED_7_7_B_BIT_POS_MASK };
-/* BYTE Pos = TLCOUT BIT NO. */
- const uint8_t lookup_byte_pos[] = {
+	 LED_7_7_R_BIT_POS_MASK,LED_7_7_G_BIT_POS_MASK,LED_7_7_B_BIT_POS_MASK }; //!< Lookuptable - Bit position used in process_bam_input()
+
+// BYTE Pos = TLCOUT BIT NO.
+static const uint8_t lookup_byte_pos[] = {
 	 LED_0_0_R_BYTE_POS,LED_0_0_G_BYTE_POS,LED_0_0_B_BYTE_POS,
 	 LED_1_0_R_BYTE_POS,LED_1_0_G_BYTE_POS,LED_1_0_B_BYTE_POS,
 	 LED_2_0_R_BYTE_POS,LED_2_0_G_BYTE_POS,LED_2_0_B_BYTE_POS,
@@ -170,18 +179,22 @@ static const uint8_t bam_step_map[BAM_STEPS]={
 	 LED_4_7_R_BYTE_POS,LED_4_7_G_BYTE_POS,LED_4_7_B_BYTE_POS,
 	 LED_5_7_R_BYTE_POS,LED_5_7_G_BYTE_POS,LED_5_7_B_BYTE_POS,
 	 LED_6_7_R_BYTE_POS,LED_6_7_G_BYTE_POS,LED_6_7_B_BYTE_POS,
-	 LED_7_7_R_BYTE_POS,LED_7_7_G_BYTE_POS,LED_7_7_B_BYTE_POS }; 
+	 LED_7_7_R_BYTE_POS,LED_7_7_G_BYTE_POS,LED_7_7_B_BYTE_POS }; //!< Lookuptable - Byte position used in process_bam_input()
+
 // BAM STEP COUNTER
-static volatile uint8_t bam_step;
-// BAM TABLE MEMORY - BAM sorted
-static volatile uint8_t volatile bam_tbl_mem_1[BAM_MEM_SIZE];
-static volatile uint8_t volatile bam_tbl_mem_2[BAM_MEM_SIZE];
-static volatile uint8_t *volatile bam_tbl_mem;
-static volatile uint8_t *volatile bam_tbl_calc;
+static volatile uint8_t bam_step; //!< bam step counter, used in ISR(TIMER_16_vect)
+
+// BAM TABLE MEMORY - BAM sorted or for process use
+static volatile uint8_t volatile bam_tbl_mem_1[BAM_MEM_SIZE]; //!< data source 32*8 Byte, used in transmit_BAM_step() or transmit_BAM_step()
+static volatile uint8_t volatile bam_tbl_mem_2[BAM_MEM_SIZE]; //!< data source 32*8 Byte, used in transmit_BAM_step() or transmit_BAM_step()
+static volatile uint8_t *volatile bam_tbl_mem;	//!< source pointer used in transmit_BAM_step(), points to bam_tbl_mem_1 or bam_tbl_mem_2
+static volatile uint8_t *volatile bam_tbl_proc; //!< source pointer used in process_bam_input(), points to bam_tbl_mem_1 or bam_tbl_mem_2
+
 // PROTOTYPES
 static void init_TLC(void);
-// init_BAM 
-// initialize I/O'S,Timer,Varibales
+
+
+/** \brief Initialize GPIO's, timer, variables initialize the TLC's */
 void init_BAM(void){
 	uint16_t i=0;
 	// init BLANK
@@ -209,14 +222,12 @@ void init_BAM(void){
 		bam_tbl_mem_2[i] = 0;
 	}
 	bam_tbl_mem=bam_tbl_mem_1;
-	bam_tbl_calc=bam_tbl_mem_2;
+	bam_tbl_proc=bam_tbl_mem_2;
 	bam_step = 0;
 	init_TLC();	
 }
 
-// init_TLC
-// initialize the tlc59281, send 32 zeros on every bus
-// Unblanks the tlc's
+/** \brief Initialize the TLC's, clear the the TLC buffer */
 static void init_TLC(void){
 	uint8_t bit_counter=0;
 	DATA_PORT = 0;
@@ -233,16 +244,22 @@ static void init_TLC(void){
 	LAT_PORT = LAT_RESET;
 	BLANK_PORT &= ~BLANK_PORT_MASK;
 }
-// transmit_BAM_step
-// makes a soft Spi on SCK-,DATA-PORT
-// sends 32 bytes (-2 bit's per byte, 6 SPI busses )
-// !!! THIS must be ISR FREE !!! Surround with cli()...sei() or
-// put it in the timer isr 
+
+/** \brief transmit the current BAM-Step to the TLCs
+ *
+ * \details	Bitbanging on the SoftSPI-GPIO's
+ *  		Send's the current bam_tbl_mem (a block of 32 Bytes) to the TLC's
+ *  		by toggling the Clock Port at about 2MHz and putting a stored byte
+ *  		on the Output-GPIOport. A block of 32 Bytes is per any BAM step...
+ *
+ *	\note 	This must be interrupt free ! - Surround with cli()...sei() or put it in the timer isr
+ *          \n Only 6 bits form a byte in the bam_tbl_mem  are used, because only 6 SOFTSPI's exist
+ */
 void transmit_BAM_step(void){
 		uint8_t volatile *bam_tbl_ptr;
 		// clear LAtch 
 		LAT_PORT = LAT_RESET;
-		// load ptr
+		// load ptr - bam step*32 + current bam_table , a lut is used...
 		bam_tbl_ptr= &bam_tbl_mem[bam_step_map[bam_step]];
 		// transmit next 32 Bytes
 		// load DATA-byte then toggle SCK-PORT		
@@ -440,10 +457,17 @@ void transmit_BAM_step(void){
 		SCK_PORT = 0;	
 }
 
-// Timer 16 ISR 
-// BAM STEPPING , every BAM-step the timing changes
+/** \brief ISR ( TIMER_16) - handle BAM cyle
+ * \param  	TIMER_16_vect ISR VECTOR
+ *
+ * \details	load the new timer reload value from bam_timer_map
+ *     		prepare the TLC for the next step, this includes
+ *     		the transmit_BAM_step()...
+ *
+ * \note	transmit_BAM_step() needs couple of 10µS
+ */
 ISR(TIMER_16_vect){
-	uint8_t bam_step_local = bam_step; // many access, a local variable is faster!!!
+	uint8_t bam_step_local = bam_step; // a local variable is faster!!!
 	// reload timer with new value
 	TIMER_16_CTRL_B = TIMER_16_STOP_TIMER;
 	TIMER_16_CNTR_H = bam_timer_map_h[bam_step_local];
@@ -461,80 +485,100 @@ ISR(TIMER_16_vect){
 	transmit_BAM_step(); 	
 }
 
-/* process_bam_input */
-/* processes every Bit from input data and put it in the right order 
-   of the BAM Table (32 Byte per Cycle [TLC OUT 0-31]) and then put it in the right bit
-   output byte (0 to 5 (SOFT SPI OUTPUT)) */
-void process_bam_input(uint8_t data, uint8_t pos){
-	uint8_t byte_pos = lookup_byte_pos[pos]; // Byte Pos 0-31
-	uint8_t bit_mask = lookup_bit_mask[pos]; // String Position 0-5
+/** \brief process the src byte into the BAM mem
+ * \param  	uint8_t src 	- data to store
+ * \param	uint8_t offset 	- position in the picture
+ *
+ * \details Processes every bit from input src data and put it in the right order
+ *  		of the BAM Table (32 Byte per Cycle [TLC OUT 0-31])
+ *  		And then put it in the right bit output byte (0 to 5 (SOFT SPI OUTPUT))
+ *  		Also a remapping is used, this is done by the defines and the two lookuptable
+ *
+ * \note	This function needs a couple of 10µS
+ */
+void process_bam_input(uint8_t src, uint8_t offset){
+	uint8_t byte_pos = lookup_byte_pos[offset]; // Byte Pos 0-31
+	uint8_t bit_mask = lookup_bit_mask[offset]; // String Position 0-5
 	uint8_t n_bit_mask = ~bit_mask;
-	uint8_t volatile *bam_tbl_ptr_local=&bam_tbl_calc[byte_pos];
-	if(data & BIT0_MASK  ){ // 0b10000000
+	uint8_t volatile *bam_tbl_ptr_local=&bam_tbl_proc[byte_pos];
+	// start with the first bit
+	if(src & BIT0_MASK  ){ // 0b00000001
+		*bam_tbl_ptr_local |= bit_mask;
+	} else {
+		*bam_tbl_ptr_local &= n_bit_mask;
+	}
+	// after the bit and byte offset is known , only a 32 add is needed,
+	// because the table are allocated as a big block...
+	bam_tbl_ptr_local+=BAM_STRING_SIZE;
+	if(src & BIT1_MASK  ){ // 0b00000010
 		*bam_tbl_ptr_local |= bit_mask;
 	} else {
 		*bam_tbl_ptr_local &= n_bit_mask;
 	}
 	bam_tbl_ptr_local+=BAM_STRING_SIZE;
-	if(data & BIT1_MASK  ){ // 0b01000000
+	if(src & BIT2_MASK  ){ // 0b00000100
 		*bam_tbl_ptr_local |= bit_mask;
 	} else {
 		*bam_tbl_ptr_local &= n_bit_mask;
 	}
 	bam_tbl_ptr_local+=BAM_STRING_SIZE;
-	if(data & BIT2_MASK  ){ // 0b00100000
+	if(src & BIT3_MASK  ){ // 0b00001000
 		*bam_tbl_ptr_local |= bit_mask;
 	} else {
 		*bam_tbl_ptr_local &= n_bit_mask;
 	}
 	bam_tbl_ptr_local+=BAM_STRING_SIZE;
-	if(data & BIT3_MASK  ){ // 0b00010000
+	if(src & BIT4_MASK  ){ // 0b00010000
 		*bam_tbl_ptr_local |= bit_mask;
 	} else {
 		*bam_tbl_ptr_local &= n_bit_mask;
 	}
 	bam_tbl_ptr_local+=BAM_STRING_SIZE;
-	if(data & BIT4_MASK  ){ // 0b00001000
-		*bam_tbl_ptr_local |= bit_mask;
-	} else {
-		*bam_tbl_ptr_local &= n_bit_mask;
-	}
-	bam_tbl_ptr_local+=BAM_STRING_SIZE;
-	if(data & BIT5_MASK  ){ // 0b00000100
+	if(src & BIT5_MASK  ){ // 0b00100000
 		*bam_tbl_ptr_local |= bit_mask;
 	} else {
 		*bam_tbl_ptr_local &= n_bit_mask;
 	}	
 	bam_tbl_ptr_local+=BAM_STRING_SIZE;
-	if(data & BIT6_MASK  ){ // 0b00000010
+	if(src & BIT6_MASK  ){ // 0b01000000
 		*bam_tbl_ptr_local |= bit_mask;
 	} else {
 		*bam_tbl_ptr_local &= n_bit_mask;
 	}
 	bam_tbl_ptr_local+=BAM_STRING_SIZE;
-	if(data & BIT7_MASK  ){ // 0b00000001
+	if(src & BIT7_MASK  ){ // 0b10000000
 		*bam_tbl_ptr_local |= bit_mask;
 	} else {
 		*bam_tbl_ptr_local &= n_bit_mask;
 	}
 } 
 
-/* Switch BAM pointer */
+/** \brief switch the BAM/CALC-SRC-Pointer
+ *
+ * \details switch the bam_tbl_calc to bam_tbl_mem and vise versa
+ */
 void switch_bam_pointer(void){
 	if(bam_tbl_mem == bam_tbl_mem_1){
 		bam_tbl_mem = bam_tbl_mem_2;
-		bam_tbl_calc = bam_tbl_mem_1;
+		bam_tbl_proc = bam_tbl_mem_1;
 	} else{
 		bam_tbl_mem = bam_tbl_mem_1;
-		bam_tbl_calc = bam_tbl_mem_2;
+		bam_tbl_proc = bam_tbl_mem_2;
 	}	
 }
-/* Start BAM Cycle */
+
+/** \brief Start BAM
+ *
+ * \details Starts the timer16
+ */
 void start_timer(void){
 	TIMER_16_CTRL_B = TIMER_16_START_TIMER;	
 }	
 
-/*Reset BAM */
+/** \brief Reset BAM
+ *
+ * \details Reset and stop the BAM
+ */
 void reset_BAM(void){
 	TIMER_16_CTRL_B = TIMER_16_STOP_TIMER;
 	bam_step=0;

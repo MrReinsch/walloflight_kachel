@@ -1,18 +1,19 @@
-﻿/*
- * bam.h
+﻿/** \brief BAM Header - Defines and Prototypes
+ * \file		bam.h
+ * \author  	Rene Reinsch
+ * \date		10.11.2013
+ * \version  	Rev. 3.1 22.2.2014
  *
- * Created: 10.11.2013 16:47:20
- * Author: René Reinsch
- * This module does the BAM,
- * and handles communication with the TLC's
- * Rev. 3.1 22.2.2014
- */ 
+ * \details		Defines for Timer16, TLC Bitbanging, TLC LATCH/BLANK
+ *				\nDefines for remapping and the lookuptable
+ */
+
 #include <avr/io.h>
 #include <avr/interrupt.h>
 
 #ifndef BAM_H_
 #define BAM_H_
-//BAM timer overflow value
+// BAM timer overflow value
 #define BAM_TIMER_MAX 0xFFFF
 // BAM factor n^2*factor
 #define BAM_TMR_STP_SIZE 50 // t Bam = (fosc/8)/(128*BAM_TMR_STP_SIZE*2)  
@@ -724,15 +725,14 @@
 #define BIT5_MASK 0x20
 #define BIT6_MASK 0x40
 #define BIT7_MASK 0x80
+
 /* Prototypes */
 extern void init_BAM(void);
-extern void process_bam_input(uint8_t data, uint8_t pos);
+extern void process_bam_input(uint8_t src, uint8_t pos);
 extern void transmit_BAM_step(void);
 extern void process_bam(uint8_t *ptr_buffer);
 extern void switch_bam_pointer(void);
 extern void start_timer(void);
 extern void reset_BAM(void);
-/* Variables */
-
 
 #endif /* BAM_H_ */
